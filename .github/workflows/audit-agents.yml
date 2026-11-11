@@ -1,0 +1,56 @@
+name: Audit de sécurité des agents
+
+# Cherche, dans les fichiers qui pilotent les agents (agents, skills, instructions, hooks,
+# scripts, CI), les injections d'instructions et l'exécution de code cachée.
+# Erreur = job en échec. Alerte = annotation dans l'onglet « Files changed » de la PR.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # En PR, le scanner est lu sur la branche cible et non dans la PR : une PR ne peut
+      # pas l'affaiblir pour se valider elle-même.
+      - name: Audit
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            scanner="$RUNNER_TEMP/audit-agents.mjs"
+            if git show "$BASE_SHA:scripts/audit-agents.mjs" > "$scanner" 2>/dev/null; then
+              echo "Scanner lu sur la branche cible ($BASE_SHA)."
+            else
+              echo "::warning::Scanner absent de la branche cible : version de la PR utilisée."
+              scanner=scripts/audit-agents.mjs
+            fi
+            node "$scanner" --base "$BASE_SHA" --head HEAD
+          else
+            node scripts/audit-agents.mjs
+          fi
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test "scripts/*.test.mjs"
